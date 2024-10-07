@@ -1,0 +1,141 @@
+version: '3.7'
+
+volumes:
+  my-volume-local:
+    name: my-volume-local
+services:
+  zookeeper:
+    container_name: zookeeper
+    image: confluentinc/cp-zookeeper:6.2.1
+    hostname: zookeeper.docker
+    ports:
+      - "2181:2181"
+    network_mode: bridge
+    restart: always
+    env_file:
+      - ./docker/env/zookeeper
+  kafka:
+    image: confluentinc/cp-server:6.2.1
+    hostname: broker.docker
+    container_name: broker
+    depends_on:
+      - zookeeper
+    links:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    network_mode: bridge
+    restart: always
+    env_file:
+      - ./docker/env/broker
+  schema-registry:
+    image: confluentinc/cp-schema-registry:6.2.1
+    hostname: schema-registry.docker
+    container_name: schema-registry
+    depends_on:
+      - kafka
+    links:
+      - kafka
+    ports:
+      - "8081:8081"
+    network_mode: bridge
+    env_file:
+      - ./docker/env/schema-registry
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:6.2.1
+    hostname: control-center.docker
+    container_name: control-center
+    depends_on:
+      - kafka
+      - schema-registry
+    links:
+      - kafka
+      - schema-registry
+    ports:
+      - "9021:9021"
+    network_mode: bridge
+    restart: always
+    env_file:
+      - ./docker/env/control-center
+  connect:
+    image: confluentinc/cp-kafka-connect-base:7.4.1
+    hostname: kafka-connect.docker
+    container_name: kafka-connect
+    depends_on:
+      - kafka
+      - schema-registry
+      - http
+    links:
+      - kafka
+      - schema-registry
+      - http
+    ports:
+      - 8083:8083
+    network_mode: bridge
+    restart: always
+    environment:
+      CONNECT_REST_ADVERTISED_HOST_NAME: "kafka-connect"
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+      CONNECT_KEY_CONVERTER: "io.confluent.connect.avro.AvroConverter"
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+      CONNECT_BOOTSTRAP_SERVERS: "broker:29092"
+      CONNECT_GROUP_ID: "kafka-connect"
+      CONNECT_INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER: "io.confluent.connect.avro.AvroConverter"
+      CONNECT_INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_REST_ADVERTISED_LISTENER: "http"
+      CONNECT_REST_ADVERTISED_PORT: "8083"
+      CONNECT_REST_PORT: "8083"
+      CONNECT_OFFSET_STORAGE_TOPIC: "offset"
+      CONNECT_CONFIG_STORAGE_TOPIC: "config"
+      CONNECT_STATUS_STORAGE_TOPIC: "status"
+      CONNECT_CONNECTOR_CLIENT_CONFIG_OVERRIDE_POLICY: "All"
+      CONNECT_LOG4J_ROOT_LOGLEVEL: "INFO"
+      CONNECT_LOG4J_APPENDER_STDOUT_LAYOUT_CONVERSIONPATTERN: "[%d] %p %X{connector.context}%m (%c:%L)%n"
+      CONNECT_MAX_POLL_INTERVAL_MS: "900000"
+      CONNECT_MAX_POLL_RECORDS: "50"
+      CONNECT_HEARTBEAT_INTERVAL_MS: "20000"
+      CONNECT_SESSION_TIMEOUT_MS: "60000"
+      CONNECT_OFFSET_FLUSH_INTERVAL_MS: "30000"
+      CONNECT_OFFSET_FLUSH_TIMEOUT_MS: "20000"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      KAFKA_OPTS: "-Duser.timezone=GMT-3"
+    volumes:
+      - ./docker/kafka-connector/data:/data
+      - ./docker/kafka-connector/scripts:/scripts
+      - ./docker/kafka-connector/extra:/usr/share/confluent-hub-components/extra/
+  http:
+    image: mendhak/http-https-echo:34
+    hostname: http-echo
+    container_name: http-echo
+    ports:
+      - 8888:8888
+      - 9999:9999
+      - 8443:9999
+    network_mode: bridge
+    restart: always
+    environment:
+      CONNECT_REST_ADVERTISED_HOST_NAME: "kafka-connect"
+      HTTP_PORT: "8888"
+      HTTPS_PORT: "9999"
+  ksql-datagen:
+    image: confluentinc/ksqldb-examples:7.4.1
+    hostname: ksql-datagen
+    container_name: ksql-datagen
+    network_mode: bridge
+    restart: always
+    volumes:
+      - ./delta_configs/ksql-datagen.delta:/tmp/ksql-datagen.delta
+    command: "bash -c 'sleep 180 && /usr/bin/ksql-datagen quickstart=orders format=avro topic=test1 msgRate=2 bootstrap-server=broker:29092 schemaRegistryUrl=http://schema-registry:8081 propertiesFile=/tmp/ksql-datagen.delta'"
+    depends_on:
+      - kafka
+      - schema-registry
+    links:
+      - kafka
+      - schema-registry
+    environment:
+      KSQL_CONFIG_DIR: "/etc/ksql"
+      STREAMS_BOOTSTRAP_SERVERS: "broker:29092"
